@@ -1,10 +1,15 @@
 package com.example.finalproject.ui.navigation
 
-import androidx.compose.runtime.*
+import android.net.Uri
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.finalproject.ui.screens.SearchScreen
 import com.example.finalproject.ui.screens.WelcomeScreen
 import com.example.finalproject.ui.screens.WeatherScreen
@@ -32,15 +37,38 @@ fun AppNavHost() {
                 viewModel = vm,
                 onSelect = { location ->
                     vm.loadWeather(location.latitude, location.longitude)
-                    navController.navigate("weather")
+                    val cityNameEncoded = Uri.encode(location.name ?: "")
+                    navController.navigate("weather/$cityNameEncoded")
                 }
             )
         }
 
-        composable("weather") {
+        composable(
+            route = "weather/{city}",
+            arguments = listOf(
+                navArgument("city") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
             val weatherState by vm.weather.collectAsState()
-            WeatherScreen(weatherState)
+            val cityArg = backStackEntry.arguments?.getString("city") ?: ""
+            val cityTitle: String? = cityArg.takeIf { it.isNotBlank() }?.let { Uri.decode(it) }
+            val headerText = cityTitle ?: run {
+                val lat = weatherState?.latitude
+                val lon = weatherState?.longitude
+                val tz = weatherState?.timezone
+                when {
+                    !tz.isNullOrBlank() -> tz
+                    lat != null && lon != null -> String.format("%.2f, %.2f", lat, lon)
+                    else -> "Unknown"
+                }
+            }
+            WeatherScreen(
+                cityName = headerText,
+                weather = weatherState
+            )
         }
     }
 }
+
+
 
