@@ -1,10 +1,18 @@
+@file:Suppress("DEPRECATION")
+
 package com.example.finalproject.ui.screens
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.location.Geocoder
+import android.location.LocationManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,23 +38,16 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.finalproject.network.Location
 import com.example.finalproject.viewmodel.WeatherViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlin.math.abs
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 private const val PREFS_NAME = "favorites_prefs"
 private const val PREFS_KEY_FAVS = "favorite_places_v1"
-
-private fun encodeFavEntry(name: String?, country: String?, lat: Double?, lon: Double?): String {
-    val n = (name ?: "").replace("\n", " ").replace("|", " ")
-    val c = (country ?: "").replace("\n", " ").replace("|", " ")
-    val latS = lat?.toString() ?: ""
-    val lonS = lon?.toString() ?: ""
-    return listOf(n, c, latS, lonS).joinToString("|")
-}
-
 private fun decodeFavEntry(entry: String): Location? {
     val parts = entry.split("|")
     if (parts.size < 4) return null
@@ -57,14 +58,12 @@ private fun decodeFavEntry(entry: String): Location? {
     if (name == null && country == null && lat == null && lon == null) return null
     return Location(name = name, country = country, latitude = lat, longitude = lon)
 }
-
 private fun getFavoritesFromPrefs(context: Context): List<Location> {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     val raw = prefs.getString(PREFS_KEY_FAVS, "") ?: ""
     if (raw.isBlank()) return emptyList()
     return raw.lines().map { it.trim() }.filter { it.isNotEmpty() }.mapNotNull { decodeFavEntry(it) }
 }
-
 private fun weatherEmoji(code: Int?): String {
     return when (code) {
         null -> "❔"
@@ -80,7 +79,7 @@ private fun weatherEmoji(code: Int?): String {
         else -> "☁️"
     }
 }
-
+@SuppressLint("QueryPermissionsNeeded")
 @Composable
 fun SearchScreen(
     viewModel: WeatherViewModel,
@@ -91,16 +90,44 @@ fun SearchScreen(
     val scope = rememberCoroutineScope()
     val locationsState by viewModel.locations.collectAsState()
     val searchTemps: Map<String, String> by viewModel.searchTemps.collectAsState(initial = emptyMap())
+    val searchWeatherCodes: Map<String, Int?> by viewModel.searchWeatherCodes.collectAsState(initial = emptyMap())
     val loading by viewModel.loading.collectAsState()
     val error by viewModel.error.collectAsState()
     val weatherState by viewModel.weather.collectAsState()
     val searchResults = locationsState
     val context = LocalContext.current
     val savedPlaces = remember { mutableStateListOf<Location>() }
+    var currentPlaceName by remember { mutableStateOf<String?>(null) }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            fetchAndApplyDeviceLocation(context, scope, viewModel) { name ->
+                currentPlaceName = name
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        val pm = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        if (pm == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            fetchAndApplyDeviceLocation(context, scope, viewModel) { name ->
+                currentPlaceName = name
+            }
+        } else {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
     LaunchedEffect(Unit) {
         val favs = getFavoritesFromPrefs(context)
         savedPlaces.clear()
         savedPlaces.addAll(favs)
+        favs.forEach { loc ->
+            loc.latitude?.let { lat ->
+                loc.longitude?.let { lon ->
+                    viewModel.fetchWeatherForLocation(lat, lon)
+                }
+            }
+        }
     }
     DisposableEffect(context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -110,6 +137,13 @@ fun SearchScreen(
                     val favs = getFavoritesFromPrefs(context)
                     savedPlaces.clear()
                     savedPlaces.addAll(favs)
+                    favs.forEach { loc ->
+                        loc.latitude?.let { lat ->
+                            loc.longitude?.let { lon ->
+                                viewModel.fetchWeatherForLocation(lat, lon)
+                            }
+                        }
+                    }
                 }
             }
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -117,7 +151,6 @@ fun SearchScreen(
             prefs.unregisterOnSharedPreferenceChangeListener(listener)
         }
     }
-
     val currentTempString: String = previewCurrentTemp
         ?: weatherState?.current_weather?.temperature?.let { "${it.toInt()}°" } ?: "--°"
     var query by remember { mutableStateOf("") }
@@ -174,9 +207,7 @@ fun SearchScreen(
                     }
                 )
             )
-
             Spacer(modifier = Modifier.width(12.dp))
-
             Button(
                 onClick = {
                     val trimmed = query.trim()
@@ -192,7 +223,6 @@ fun SearchScreen(
                 Text("Search")
             }
         }
-
         Spacer(modifier = Modifier.height(18.dp))
         val isSearching = query.trim().isNotEmpty()
         if (isSearching) {
@@ -209,7 +239,6 @@ fun SearchScreen(
                     }
                 }
             }
-
             if (loading) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -223,19 +252,27 @@ fun SearchScreen(
                     } else {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             searchResults.forEach { loc ->
-                                val tempForItem = tempFromSearchTemps(searchTemps = searchTemps, lat = loc.latitude, lon = loc.longitude)
-                                LocationRowWithTemp(location = loc, tempString = tempForItem, weatherCode = null, onClick = {
-                                    query = ""
-                                    searchSubmitted = false
-                                    onSelect(loc)
-                                })
+                                val key = if (loc.latitude != null && loc.longitude != null) {
+                                    String.format(Locale.US, "%.5f_%.5f", loc.latitude, loc.longitude)
+                                } else ""
+                                val tempForItem = if (key.isNotEmpty()) searchTemps[key] ?: "--°" else "--°"
+                                val codeForItem = if (key.isNotEmpty()) searchWeatherCodes[key] else null
+                                LocationRowWithTemp(
+                                    location = loc,
+                                    tempString = tempForItem,
+                                    weatherCode = codeForItem,
+                                    onClick = {
+                                        query = ""
+                                        searchSubmitted = false
+                                        onSelect(loc)
+                                    }
+                                )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
                         }
                     }
                 }
             }
-
             error?.let {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(text = it, color = MaterialTheme.colorScheme.error)
@@ -244,32 +281,45 @@ fun SearchScreen(
         }
         CurrentLocationCard(
             tempString = currentTempString,
-            weatherState = weatherState,
+            currentName = currentPlaceName ?: (weatherState?.timezone?.let { formatCityNameFromTimezone(it) } ?: "Current location"),
             onClick = {
-                weatherState?.let {
-                    onSelect(
-                        Location(
-                            name = formatCityNameFromTimezone(it.timezone),
-                            country = null,
-                            latitude = it.latitude,
-                            longitude = it.longitude
-                        )
+                onSelect(
+                    Location(
+                        name = "Current location",
+                        country = null,
+                        latitude = null,
+                        longitude = null
                     )
-                }
+                )
             },
             onLocationIconClick = {
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    val uri: Uri = Uri.fromParts("package", context.packageName, null)
-                    data = uri
+                try {
+                    val pkg = context.packageName
+                    val managePermsIntent = Intent().apply {
+                        action = "android.settings.MANAGE_APP_PERMISSIONS"
+                        putExtra("android.provider.extra.APP_PACKAGE", pkg)
+                    }
+                    if (managePermsIntent.resolveActivity(context.packageManager) != null) {
+                        context.startActivity(managePermsIntent)
+                        return@CurrentLocationCard
+                    }
+                    val appDetails = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", pkg, null)
+                    }
+                    if (appDetails.resolveActivity(context.packageManager) != null) {
+                        context.startActivity(appDetails)
+                        return@CurrentLocationCard
+                    }
+                    val locIntent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                    if (locIntent.resolveActivity(context.packageManager) != null) {
+                        context.startActivity(locIntent)
+                    }
+                } catch (_: Exception) {
                 }
-                context.startActivity(intent)
             }
         )
-
         Spacer(modifier = Modifier.height(20.dp))
-
         Text(text = "Saved places", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
-
         if (loading) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -292,61 +342,37 @@ fun SearchScreen(
                             "${loc.name ?: "unknown"}|${loc.country ?: ""}"
                         }
                     }) { loc ->
+                        val key = if (loc.latitude != null && loc.longitude != null) {
+                            String.format(Locale.US, "%.5f_%.5f", loc.latitude, loc.longitude)
+                        } else ""
+                        val tempForSaved = if (key.isNotEmpty()) searchTemps[key] ?: "--°" else "--°"
+                        val codeForSaved = if (key.isNotEmpty()) searchWeatherCodes[key] else null
+
                         SavedPlaceRow(
                             location = loc,
-                            tempString = tempStringForLocation(weatherState, loc),
-                            weatherCode = run {
-                                val eps = 0.001
-                                val w = weatherState
-                                if (w == null) null
-                                else {
-                                    if (loc.latitude != null && loc.longitude != null &&
-                                        abs(w.latitude - loc.latitude) < eps &&
-                                        abs(w.longitude - loc.longitude) < eps
-                                    ) {
-                                        w.current_weather?.weathercode
-                                    } else null
-                                }
-                            },
+                            tempString = tempForSaved,
+                            weatherCode = codeForSaved,
                             onClick = { onSelect(loc) }
                         )
                     }
                 }
             }
         }
-
         error?.let {
             Spacer(modifier = Modifier.height(8.dp))
             Text(text = it, color = MaterialTheme.colorScheme.error)
         }
     }
 }
-
-private fun tempFromSearchTemps(searchTemps: Map<String, String>, lat: Double?, lon: Double?): String {
-    if (lat == null || lon == null) return "--°"
-    val key = String.format(Locale.US, "%.5f_%.5f", lat, lon)
-    return searchTemps[key] ?: "--°"
-}
 private fun formatCityNameFromTimezone(timezone: String?): String {
     if (timezone.isNullOrBlank()) return "Current location"
     val raw = timezone.substringAfterLast('/')
     return raw.replace('_', ' ')
 }
-private fun tempStringForLocation(weatherState: com.example.finalproject.network.WeatherResponse?, loc: Location): String {
-    val eps = 0.001
-    val w = weatherState ?: return "--°"
-    return if (abs(w.latitude - (loc.latitude ?: Double.NaN)) < eps &&
-        abs(w.longitude - (loc.longitude ?: Double.NaN)) < eps
-    ) {
-        w.current_weather?.temperature?.let { "${it.toInt()}°" } ?: "--°"
-    } else {
-        "--°"
-    }
-}
 @Composable
 private fun CurrentLocationCard(
     tempString: String,
-    weatherState: com.example.finalproject.network.WeatherResponse?,
+    currentName: String,
     onClick: () -> Unit,
     onLocationIconClick: () -> Unit
 ) {
@@ -365,16 +391,13 @@ private fun CurrentLocationCard(
             IconButton(onClick = { onLocationIconClick() }, modifier = Modifier.size(40.dp)) {
                 Icon(imageVector = Icons.Default.Place, contentDescription = "place", modifier = Modifier.size(20.dp))
             }
-
             Spacer(modifier = Modifier.width(8.dp))
-
             Column(modifier = Modifier.weight(1f)) {
-                val cityName = weatherState?.timezone?.let { formatCityNameFromTimezone(it) } ?: "Current location"
+                val cityName = currentName
                 Text(text = cityName, style = MaterialTheme.typography.bodyLarge)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(text = "Tap to view details", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
             Box(modifier = Modifier
                 .clickable { onClick() }
                 .padding(start = 8.dp)
@@ -404,7 +427,6 @@ private fun SavedPlaceRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(text = location.name ?: "Unknown", style = MaterialTheme.typography.bodyLarge)
         }
-
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = weatherEmoji(weatherCode), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 8.dp))
             Text(text = tempString, style = MaterialTheme.typography.headlineSmall)
@@ -427,10 +449,57 @@ private fun LocationRowWithTemp(location: Location, tempString: String, weatherC
             Text(text = location.name ?: "Unknown", style = MaterialTheme.typography.bodyLarge)
             Text(text = location.country ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = weatherEmoji(weatherCode), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 8.dp))
             Text(text = tempString, style = MaterialTheme.typography.headlineSmall)
         }
+    }
+}
+private fun fetchAndApplyDeviceLocation(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    viewModel: WeatherViewModel,
+    onNameResolved: (String) -> Unit
+) {
+    try {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        val providers = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+        var best: android.location.Location? = null
+        for (p in providers) {
+            try {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    val l = lm.getLastKnownLocation(p)
+                    if (l != null) {
+                        if (best == null || l.time > best.time) best = l
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        if (best != null) {
+            val lat = best.latitude
+            val lon = best.longitude
+            scope.launch {
+                val name = withContext(Dispatchers.IO) {
+                    try {
+                        val geocoder = Geocoder(context, Locale.getDefault())
+                        val list = geocoder.getFromLocation(lat, lon, 1)
+                        if (!list.isNullOrEmpty()) {
+                            val placemark = list[0]
+                            placemark.locality ?: placemark.subAdminArea ?: placemark.adminArea ?: "Current location"
+                        } else {
+                            "Current location"
+                        }
+                    } catch (_: Exception) {
+                        "Current location"
+                    }
+                }
+                onNameResolved(name)
+                viewModel.loadWeather(lat, lon)
+            }
+        }
+    } catch (_: Exception) {
     }
 }
