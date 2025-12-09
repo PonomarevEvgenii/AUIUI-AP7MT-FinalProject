@@ -1,6 +1,8 @@
 package com.example.finalproject.ui.navigation
 
 import android.net.Uri
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -15,13 +17,12 @@ import com.example.finalproject.ui.screens.WelcomeScreen
 import com.example.finalproject.ui.screens.WeatherScreen
 import com.example.finalproject.viewmodel.WeatherViewModel
 
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun AppNavHost() {
     val navController = rememberNavController()
     val vm: WeatherViewModel = viewModel()
-
     NavHost(navController = navController, startDestination = "welcome") {
-
         composable("welcome") {
             WelcomeScreen(
                 onGetStarted = {
@@ -31,12 +32,16 @@ fun AppNavHost() {
                 }
             )
         }
-
         composable("search") {
             SearchScreen(
                 viewModel = vm,
                 onSelect = { location ->
-                    vm.loadWeather(location.latitude, location.longitude)
+                    val lat = location.latitude
+                    val lon = location.longitude
+                    if (lat != null && lon != null) {
+                        vm.loadWeather(lat, lon)
+                    } else {
+                    }
                     val cityNameEncoded = Uri.encode(location.name ?: "")
                     navController.navigate("weather/$cityNameEncoded")
                 }
@@ -69,6 +74,7 @@ fun AppNavHost() {
         }
     }
 }
+
 
 
 

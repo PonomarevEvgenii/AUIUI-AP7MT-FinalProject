@@ -1,6 +1,8 @@
 package com.example.finalproject.ui.screens
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
@@ -11,24 +13,98 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.finalproject.network.WeatherResponse
+import com.example.finalproject.network.Location
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.activity.ComponentActivity
+import androidx.core.content.edit
+private const val PREFS_NAME = "favorites_prefs"
+private const val PREFS_KEY_FAVS = "favorite_places_v1"
+private fun encodeFavEntry(name: String?, country: String?, lat: Double?, lon: Double?): String {
+    val n = (name ?: "").replace("\n", " ").replace("|", " ")
+    val c = (country ?: "").replace("\n", " ").replace("|", " ")
+    val latS = lat?.toString() ?: ""
+    val lonS = lon?.toString() ?: ""
+    return listOf(n, c, latS, lonS).joinToString("|")
+}
 
+private fun decodeFavEntry(entry: String): Location? {
+    val parts = entry.split("|")
+    if (parts.size < 4) return null
+    val name = parts[0].ifBlank { null }
+    val country = parts[1].ifBlank { null }
+    val lat = parts[2].toDoubleOrNull()
+    val lon = parts[3].toDoubleOrNull()
+    if (name == null && country == null && lat == null && lon == null) return null
+    return Location(name = name, country = country, latitude = lat, longitude = lon)
+}
+
+private fun getFavoritesFromPrefs(context: Context): List<Location> {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val raw = prefs.getString(PREFS_KEY_FAVS, "") ?: ""
+    if (raw.isBlank()) return emptyList()
+    return raw.lines().mapNotNull { it.trim() }.filter { it.isNotEmpty() }.mapNotNull { decodeFavEntry(it) }
+}
+
+private fun saveFavoritesToPrefs(context: Context, favorites: List<Location>) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val encoded = favorites.joinToString("\n") { loc ->
+        encodeFavEntry(loc.name ?: "", loc.country ?: "", loc.latitude, loc.longitude)
+    }
+    prefs.edit { putString(PREFS_KEY_FAVS, encoded) }
+}
+private fun addFavoriteToPrefs(context: Context, loc: Location) {
+    val favs = getFavoritesFromPrefs(context).toMutableList()
+    val exists = favs.any { existing ->
+        val latEq = existing.latitude != null && loc.latitude != null && kotlin.math.abs(existing.latitude - loc.latitude) < 0.000001
+        val lonEq = existing.longitude != null && loc.longitude != null && kotlin.math.abs(existing.longitude - loc.longitude) < 0.000001
+        if (latEq && lonEq) true
+        else {
+            val nameEq = (existing.name ?: "").trim().equals((loc.name ?: "").trim(), ignoreCase = true)
+            val countryEq = (existing.country ?: "").trim().equals((loc.country ?: "").trim(), ignoreCase = true)
+            nameEq && countryEq
+        }
+    }
+    if (!exists) {
+        favs.add(loc)
+        saveFavoritesToPrefs(context, favs)
+    }
+}
+private fun removeFavoriteFromPrefs(context: Context, loc: Location) {
+    val favs = getFavoritesFromPrefs(context).toMutableList()
+    val idx = favs.indexOfFirst { existing ->
+        val latEq = existing.latitude != null && loc.latitude != null && kotlin.math.abs(existing.latitude - loc.latitude) < 0.000001
+        val lonEq = existing.longitude != null && loc.longitude != null && kotlin.math.abs(existing.longitude - loc.longitude) < 0.000001
+        if (latEq && lonEq) true
+        else {
+            val nameEq = (existing.name ?: "").trim().equals((loc.name ?: "").trim(), ignoreCase = true)
+            val countryEq = (existing.country ?: "").trim().equals((loc.country ?: "").trim(), ignoreCase = true)
+            nameEq && countryEq
+        }
+    }
+    if (idx >= 0) {
+        favs.removeAt(idx)
+        saveFavoritesToPrefs(context, favs)
+    }
+}
+
+@SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun WeatherScreen(
@@ -36,10 +112,72 @@ fun WeatherScreen(
     weather: WeatherResponse?,
     @SuppressLint("ModifierParameter") modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val activity = context as? ComponentActivity
+
     val headerTitle: String = cityName?.takeIf { it.isNotBlank() }
         ?: weather?.timezone?.takeIf { it.isNotBlank() }
         ?: weather?.let { "${"%.2f".format(it.latitude)}, ${"%.2f".format(it.longitude)}" }
         ?: "Unknown"
+
+    val currentLocation = weather?.let {
+        val derivedName = cityName ?: weather.timezone?.substringAfterLast('/')?.replace('_', ' ')
+        Location(name = derivedName, country = null, latitude = weather.latitude, longitude = weather.longitude)
+    }
+    var isFavorite by remember { mutableStateOf(false) }
+    LaunchedEffect(currentLocation) {
+        currentLocation?.let { loc ->
+            val favs = getFavoritesFromPrefs(context)
+            val found = favs.any { existing ->
+                val latEq = existing.latitude != null && loc.latitude != null && abs(existing.latitude - loc.latitude) < 0.000001
+                val lonEq = existing.longitude != null && loc.longitude != null && abs(existing.longitude - loc.longitude) < 0.000001
+                if (latEq && lonEq) true
+                else {
+                    val nameEq = (existing.name ?: "").trim().equals((loc.name ?: "").trim(), ignoreCase = true)
+                    val countryEq = (existing.country ?: "").trim().equals((loc.country ?: "").trim(), ignoreCase = true)
+                    nameEq && countryEq
+                }
+            }
+            isFavorite = found
+        } ?: run {
+            isFavorite = false
+        }
+    }
+    DisposableEffect(context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PREFS_KEY_FAVS) {
+                currentLocation?.let { loc ->
+                    val favs = getFavoritesFromPrefs(context)
+                    val found = favs.any { existing ->
+                        val latEq = existing.latitude != null && loc.latitude != null && abs(existing.latitude - loc.latitude) < 0.000001
+                        val lonEq = existing.longitude != null && loc.longitude != null && abs(existing.longitude - loc.longitude) < 0.000001
+                        if (latEq && lonEq) true
+                        else {
+                            val nameEq = (existing.name ?: "").trim().equals((loc.name ?: "").trim(), ignoreCase = true)
+                            val countryEq = (existing.country ?: "").trim().equals((loc.country ?: "").trim(), ignoreCase = true)
+                            nameEq && countryEq
+                        }
+                    }
+                    isFavorite = found
+                } ?: run {
+                    isFavorite = false
+                }
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose {
+            prefs.unregisterOnSharedPreferenceChangeListener(listener)
+        }
+    }
+    fun addFavorite(loc: Location) {
+        addFavoriteToPrefs(context, loc)
+        isFavorite = true
+    }
+    fun removeFavorite(loc: Location) {
+        removeFavoriteFromPrefs(context, loc)
+        isFavorite = false
+    }
     val hourlyTimes = weather?.hourly?.time ?: emptyList()
     val hourlyTemps = weather?.hourly?.temperature_2m ?: emptyList()
     val hourlyHumidity = weather?.hourly?.relativehumidity_2m ?: emptyList()
@@ -135,7 +273,7 @@ fun WeatherScreen(
     ) {
         item {
             Box(modifier = Modifier.fillMaxWidth()) {
-                IconButton(onClick = { }, modifier = Modifier.align(Alignment.CenterStart)) {
+                IconButton(onClick = { activity?.onBackPressedDispatcher?.onBackPressed() }, modifier = Modifier.align(Alignment.CenterStart)) {
                     Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                 }
                 Text(
@@ -147,10 +285,25 @@ fun WeatherScreen(
                     textAlign = TextAlign.Center,
                     maxLines = 1
                 )
-                Icon(imageVector = Icons.Default.LocationOn, contentDescription = "location", modifier = Modifier.size(28.dp).align(Alignment.CenterEnd))
+
+                if (currentLocation != null) {
+                    IconButton(
+                        onClick = {
+                            if (isFavorite) removeFavorite(currentLocation) else addFavorite(currentLocation)
+                        },
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    ) {
+                        if (isFavorite) {
+                            Icon(imageVector = Icons.Default.Favorite, contentDescription = "Unfavorite", tint = MaterialTheme.colorScheme.primary)
+                        } else {
+                            Icon(imageVector = Icons.Outlined.FavoriteBorder, contentDescription = "Favorite")
+                        }
+                    }
+                } else {
+                    Icon(imageVector = Icons.Default.ArrowUpward, contentDescription = "location", modifier = Modifier.size(28.dp).align(Alignment.CenterEnd))
+                }
             }
         }
-
         item {
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 val description = mapWeatherCodeToText(weather?.current_weather?.weathercode)
@@ -231,6 +384,7 @@ private data class MetricCardData(
     val windDir: Double? = null,
     val windLabel: String? = null
 )
+
 @Composable
 private fun MetricSquareCard(metric: MetricCardData, modifier: Modifier = Modifier) {
     Card(
@@ -290,6 +444,7 @@ private fun MetricSquareCard(metric: MetricCardData, modifier: Modifier = Modifi
         }
     }
 }
+
 @Composable
 private fun HourlyCard(
     temperature: Double?,
@@ -307,6 +462,7 @@ private fun HourlyCard(
         }
     }
 }
+
 @Composable
 private fun DailyCard(dateLabel: String, avgTemp: Int?, humidity: Int?, weatherCode: Int?, modifier: Modifier = Modifier) {
     Card(shape = RoundedCornerShape(12.dp), modifier = modifier.width(80.dp).height(140.dp)) {
@@ -318,12 +474,14 @@ private fun DailyCard(dateLabel: String, avgTemp: Int?, humidity: Int?, weatherC
         }
     }
 }
+
 private data class DailySummary(
     val dateLabel: String,
     val avgTemp: Int?,
     val avgHumidity: Int?,
     val code: Int?
 )
+
 private fun computeDailySummaries(
     hourlyTimes: List<String>,
     hourlyTemps: List<Double>,
@@ -365,9 +523,11 @@ private fun computeDailySummaries(
     }
     return result
 }
+
 private fun extractTimePart(dateTime: String): String {
     return dateTime.substringAfterLast('T').substringBefore(' ')
 }
+
 private fun formatHourLabel(isoTime: String): String {
     return try {
         isoTime.substringAfter("T").substring(0, 5)
@@ -375,6 +535,7 @@ private fun formatHourLabel(isoTime: String): String {
         "--:00"
     }
 }
+
 private fun parseToEpochSecondsUtc(dateTime: String): Long? {
     return try {
         val odt = OffsetDateTime.parse(dateTime)
@@ -388,6 +549,7 @@ private fun parseToEpochSecondsUtc(dateTime: String): Long? {
         }
     }
 }
+
 @RequiresApi(Build.VERSION_CODES.O)
 private fun findNearestHourlyIndex(weather: WeatherResponse?): Int {
     val curTime = weather?.current_weather?.time ?: return -1
@@ -405,6 +567,7 @@ private fun findNearestHourlyIndex(weather: WeatherResponse?): Int {
     }
     return bestIdx
 }
+
 private fun findNearestDailyIndex(weather: WeatherResponse?): Int {
     val curTime = weather?.current_weather?.time ?: return 0
     val curDate = curTime.substringBefore('T').substringBefore(' ')
@@ -415,6 +578,7 @@ private fun findNearestDailyIndex(weather: WeatherResponse?): Int {
     }
     return 0
 }
+
 private fun hourFromIso(dateTime: String?): Int? {
     if (dateTime == null) return null
     return try {
@@ -425,6 +589,7 @@ private fun hourFromIso(dateTime: String?): Int? {
         null
     }
 }
+
 private fun findHourlyIndexByHour(hourlyTimes: List<String>, currentHour: Int): Int {
     for (i in hourlyTimes.indices) {
         val h = try {
@@ -437,6 +602,7 @@ private fun findHourlyIndexByHour(hourlyTimes: List<String>, currentHour: Int): 
     }
     return -1
 }
+
 private fun weatherEmoji(code: Int?): String {
     return when (code) {
         null -> "❔"
@@ -452,6 +618,7 @@ private fun weatherEmoji(code: Int?): String {
         else -> "☁️"
     }
 }
+
 private fun mapWeatherCodeToText(code: Int?): String {
     return when (code) {
         null -> ""
@@ -464,11 +631,13 @@ private fun mapWeatherCodeToText(code: Int?): String {
         else -> "Cloudy"
     }
 }
+
 private fun degToCompassLabel(deg: Double): String {
     val sectors = listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
     val sector = ((deg + 22.5) % 360 / 45).toInt()
     return sectors[sector]
 }
+
 @SuppressLint("DefaultLocale")
 private fun formatDouble(d: Double): String {
     return if (d % 1.0 == 0.0) d.toInt().toString() else String.format("%.1f", d)

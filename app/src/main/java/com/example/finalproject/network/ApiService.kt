@@ -9,8 +9,8 @@ data class Location(
     val id: Long? = null,
     val name: String? = null,
     val country: String? = null,
-    val latitude: Double = 0.0,
-    val longitude: Double = 0.0
+    val latitude: Double? = 0.0,
+    val longitude: Double? = 0.0
 )
 data class WeatherResponse(
     val latitude: Double,
