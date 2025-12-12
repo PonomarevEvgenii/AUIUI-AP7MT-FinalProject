@@ -318,7 +318,7 @@ fun WeatherScreen(
 
                 Card(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp)) {
                     Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(text = "Погода по часам", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(text = "Hourly weather", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
                         if (displayHours.isNotEmpty()) {
                             LazyRow(state = hourlyListState, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(displayHours) { idx ->
@@ -341,7 +341,7 @@ fun WeatherScreen(
                 Spacer(modifier = Modifier.height(20.dp))
                 Card(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp)) {
                     Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(text = "Погода по дням", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(text = "Daily weather", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
                         if (dailySummaries.isNotEmpty()) {
                             LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(dailySummaries) { ds ->
