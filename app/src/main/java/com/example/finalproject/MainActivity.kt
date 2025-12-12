@@ -2,6 +2,8 @@ package com.example.finalproject
 
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,12 +20,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.example.finalproject.ui.navigation.AppNavHost
 import com.example.finalproject.ui.theme.FinalProjectTheme
 class MainActivity : ComponentActivity() {
     private val TAG = "MainActivityStatusBar"
+    private var keepSplashOnScreen = true
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
+        splashScreen.setKeepOnScreenCondition { keepSplashOnScreen }
         super.onCreate(savedInstanceState)
+        Handler(Looper.getMainLooper()).postDelayed({
+            keepSplashOnScreen = false
+        }, 1000)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             val isDarkSystem = isSystemInDarkTheme()
@@ -50,7 +59,10 @@ class MainActivity : ComponentActivity() {
                     android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
                     android.content.res.Configuration.UI_MODE_NIGHT_YES
             applyStatusBar(isDark, MaterialThemeStubBackgroundColor())
-            Log.i(TAG, "onResume applied status bar. isDark=$isDark, statusBarColor=0x${window.statusBarColor.toUInt().toString(16)}")
+            Log.i(
+                TAG,
+                "onResume applied status bar. isDark=$isDark, statusBarColor=0x${window.statusBarColor.toUInt().toString(16)}"
+            )
         } catch (e: Exception) {
             Log.w(TAG, "onResume applyStatusBar error: ${e.message}")
         }

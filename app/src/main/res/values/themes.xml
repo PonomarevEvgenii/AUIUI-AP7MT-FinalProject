@@ -5,5 +5,10 @@
         <item name="android:statusBarColor">@color/light_primary</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+    <style name="Theme.FinalProject.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="windowSplashScreenBackground">@color/white</item>
+        <item name="postSplashScreenTheme">@style/Theme.FinalProject</item>
+    </style>
 </resources>
 

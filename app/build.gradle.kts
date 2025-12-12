@@ -64,6 +64,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
     implementation("com.google.android.material:material:1.13.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("androidx.core:core-splashscreen:1.2.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
